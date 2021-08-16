@@ -108,7 +108,6 @@ func (a Adapter) WithField(f string, v interface{}) log.Logger {
 }
 
 func (a Adapter) WithFields(fields map[string]interface{}) log.Logger {
-
 	return Adapter{
 		Config: a.Config,
 		logger: a.logger.WithFields(fields),

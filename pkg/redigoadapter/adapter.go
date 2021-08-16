@@ -130,7 +130,7 @@ func (a Adapter) GetKeys(ctx context.Context, pattern string) ([]string, error) 
 	errChan := make(chan error)
 
 	go func(p string) {
-		var keys []string
+		keys := make([]string, 0)
 		i := 0
 
 		for {
