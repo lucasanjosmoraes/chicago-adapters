@@ -105,7 +105,7 @@ func (c ConsumerAdapter) Consume(ctx context.Context, handler subscriber.HandleF
 	defer func() {
 		err := r.Close()
 		if err != nil {
-			c.Logger.Errorf(ctx, "Error on close reader connection: %s", err)
+			c.Logger.Errorf(ctx, "error closing reader connection: %s", err)
 		}
 	}()
 
@@ -118,12 +118,12 @@ func (c ConsumerAdapter) Consume(ctx context.Context, handler subscriber.HandleF
 		}
 
 		if _, ok := err.(net.Error); ok {
-			c.Logger.Errorf(ctx, "Error on process message: %s", err)
+			c.Logger.Errorf(ctx, "error processing message: %s", err)
 			return err
 		}
 
 		if err != nil {
-			c.Logger.Errorf(ctx, "Error on process message: %s", err)
+			c.Logger.Errorf(ctx, "error processing message: %s", err)
 			continue
 		}
 
@@ -147,46 +147,53 @@ func (c ConsumerAdapter) StopError() error {
 	return context.Canceled
 }
 
-func (c ConsumerAdapter) acknowledgeMessage(r *kafka.Reader, m kafka.Message) func(context.Context) error {
-	return func(ctx context.Context) error {
-		notifier := func(err error, duration time.Duration) {
-			c.Logger.Warnf(ctx, "Ack failed. Retrying in %s ...", duration)
+func (c ConsumerAdapter) acknowledgeMessage(r *kafka.Reader, m kafka.Message) subscriber.Ack {
+	return func(ctx context.Context, logger log.Logger, actions subscriber.Actions) error {
+		if actions == nil {
+			actions = subscriber.DoNothing
 		}
 
-		err := backoff.RetryNotify(backoff.Operation(c.commit(ctx, r, m)), backoff.NewExponentialBackOff(), notifier)
+		notifier := func(err error, duration time.Duration) {
+			logger.Warnf(ctx, "ack failed, retrying in %s ...", duration)
+		}
+
+		err := backoff.RetryNotify(c.commit(ctx, logger, r, m, actions), backoff.NewExponentialBackOff(), notifier)
 		if err != nil {
-			c.Logger.Errorf(ctx, "Error on acknowledge message: %s", err)
+			logger.Errorf(ctx, "error acknowledging message: %s", err)
 		}
 
 		return err
 	}
 }
 
-func (c ConsumerAdapter) commit(ctx context.Context, r *kafka.Reader, m kafka.Message) func() error {
+func (c ConsumerAdapter) commit(ctx context.Context, logger log.Logger, r *kafka.Reader, m kafka.Message, actions subscriber.Actions) backoff.Operation {
 	return func() error {
-		return commit(ctx, c.Logger, r, m)
+		return commit(ctx, logger, r, m, actions)
 	}
 }
 
-func commit(ctx context.Context, l log.Logger, r *kafka.Reader, m kafka.Message) error {
+func commit(ctx context.Context, l log.Logger, r *kafka.Reader, m kafka.Message, actions subscriber.Actions) error {
+	actions.BeforeAck(ctx)
+
 	err := r.CommitMessages(ctx, m)
 	if err != nil {
-		l.Errorf(ctx, "Error on commit message: %s", err)
+		l.Errorf(ctx, "error committing message: %s", err)
 		return err
 	}
 
+	actions.AfterAck(ctx)
 	l.Debug(ctx, "Success committed")
 
 	return nil
 }
 
-func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ack) func(ctx context.Context, err error) {
-	return func(ctx context.Context, err error) {
+func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ack) subscriber.Reject {
+	return func(ctx context.Context, logger log.Logger, err error, actions subscriber.Actions) {
 		defer func() {
-			_ = ack(ctx)
+			_ = ack(ctx, logger, actions)
 		}()
 
-		subscriber.Log(ctx, err, c.Logger)
+		subscriber.Log(ctx, err, logger)
 
 		sendableErr, ok := err.(subscriber.Error)
 		if !ok {
@@ -196,6 +203,8 @@ func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ac
 			return
 		}
 
+		actions.BeforeSendToDL(ctx)
+
 		headers := publisher.ConvertToProducerHeaders(msg.Headers())
 		publisherErr := c.Publisher.WriteEvent(ctx, c.Config.DL, publisher.Event{
 			Key:     []byte(msg.Subject()),
@@ -203,16 +212,11 @@ func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ac
 			Headers: headers,
 		})
 		if publisherErr != nil {
-			c.Logger.Errorf(ctx, "Ignore message due to error sending message to DLQ: %s", publisherErr)
+			logger.Errorf(ctx, "ignoring message due to error sending message to DLQ: %s", publisherErr)
 			return
 		}
 
-		dlErr, ok := err.(subscriber.DLBehavior)
-		if !ok {
-			c.Logger.Errorf(ctx, "Message published on DLQ due to: %s", err)
-			return
-		}
-
-		c.Logger.Error(ctx, dlErr.DLErrorMessage())
+		actions.AfterSendToDL(ctx)
+		logger.Errorf(ctx, "message published on DLQ due to: %s", err)
 	}
 }

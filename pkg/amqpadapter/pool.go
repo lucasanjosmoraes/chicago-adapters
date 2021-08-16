@@ -55,12 +55,12 @@ func (p *ChannelPool) UpdateConnection(ctx context.Context, l log.Logger) error 
 	}
 
 	notifier := func(err error, duration time.Duration) {
-		l.Warnf(ctx, "connecting to AMQP failed. Retrying in %s seconds...", duration)
+		l.Warnf(ctx, "connecting to AMQP failed, retrying in %s seconds...", duration)
 	}
 
 	err := backoff.RetryNotify(create, backoff.NewExponentialBackOff(), notifier)
 	if err != nil {
-		l.Errorf(ctx, "error on connection to AMQP: %s", err)
+		l.Errorf(ctx, "error connecting to AMQP: %s", err)
 	}
 
 	return nil
@@ -76,7 +76,7 @@ func (p *ChannelPool) QueueDeclare(ctx context.Context, l log.Logger, name strin
 		return newQ, nil
 	}
 
-	l.Info(ctx, "error on declare queue. Trying to update AMQP Connection")
+	l.Info(ctx, "error declaring queue, trying to update AMQP Connection")
 	err = p.UpdateConnection(ctx, l)
 	if err != nil {
 		return amqp.Queue{}, err
@@ -92,7 +92,7 @@ func (p *ChannelPool) QueueDeclare(ctx context.Context, l log.Logger, name strin
 func (p *ChannelPool) Consume(ctx context.Context, l log.Logger, queue, consumer string, autoAck, exclusive, noLocal, noWait bool, prefetchCount, prefetchSize int, global bool, args amqp.Table) (<-chan amqp.Delivery, error) {
 	err := p.ch.Qos(prefetchCount, prefetchSize, global)
 	if err != nil {
-		l.Info(ctx, "error on consume. Trying to update AMQP connection")
+		l.Info(ctx, "error on consume, trying to update AMQP connection")
 		err = p.UpdateConnection(ctx, l)
 		if err != nil {
 			return nil, err
@@ -117,7 +117,7 @@ func (p *ChannelPool) Produce(ctx context.Context, l log.Logger, exchange, routi
 		return nil
 	}
 
-	l.Info(ctx, "error on publish. Trying to update AMQP Connection")
+	l.Info(ctx, "error on publish, trying to update AMQP Connection")
 	err = p.UpdateConnection(ctx, l)
 	if err != nil {
 		return err

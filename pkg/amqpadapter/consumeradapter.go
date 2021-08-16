@@ -104,7 +104,7 @@ func (c ConsumerAdapter) watchConnErrors(ctx context.Context, handler subscriber
 			rabbitErr = <-c.Pool.ChConnClosed
 			time.Sleep(10 * time.Second)
 			if rabbitErr == nil {
-				c.Logger.Info(ctx, "connection to rabbitMQ has been closed. restarting")
+				c.Logger.Info(ctx, "connection to rabbitMQ has been closed, restarting")
 				err := c.setupConsumer(ctx)
 				if err != nil {
 					c.Logger.Errorf(ctx, "couldn't reconnect to rabbitMQ: %s", err)
@@ -133,51 +133,62 @@ func (c ConsumerAdapter) Consume(ctx context.Context, handler subscriber.HandleF
 	return nil
 }
 
-func (c ConsumerAdapter) acknowledgeMessage(m amqp.Delivery) func(ctx context.Context) error {
-	return func(ctx context.Context) error {
-		notifier := func(err error, duration time.Duration) {
-			c.Logger.Warnf(ctx, "Ack failed. Retrying in %s ...", duration)
+func (c ConsumerAdapter) acknowledgeMessage(m amqp.Delivery) subscriber.Ack {
+	return func(ctx context.Context, logger log.Logger, actions subscriber.Actions) error {
+		if actions == nil {
+			actions = subscriber.DoNothing
 		}
 
-		err := backoff.RetryNotify(backoff.Operation(c.commit(ctx, m)), backoff.NewExponentialBackOff(), notifier)
+		notifier := func(err error, duration time.Duration) {
+			logger.Warnf(ctx, "ack failed, retrying in %s ...", duration)
+		}
+
+		err := backoff.RetryNotify(c.commit(ctx, m, actions), backoff.NewExponentialBackOff(), notifier)
 		if err != nil {
-			c.Logger.Errorf(ctx, "Error on acknowledge message: %s", err)
+			logger.Errorf(ctx, "error acknowledging message: %s", err)
 		}
 
 		return err
 	}
 }
 
-func (c ConsumerAdapter) commit(_ context.Context, m amqp.Delivery) func() error {
+func (c ConsumerAdapter) commit(ctx context.Context, m amqp.Delivery, actions subscriber.Actions) backoff.Operation {
 	return func() error {
+		actions.BeforeAck(ctx)
+		defer actions.AfterAck(ctx)
+
 		return m.Ack(false)
 	}
 }
 
-func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ack) func(ctx context.Context, err error) {
-	return func(ctx context.Context, err error) {
-		subscriber.Log(ctx, err, c.Logger)
+func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ack) subscriber.Reject {
+	return func(ctx context.Context, logger log.Logger, err error, actions subscriber.Actions) {
+		if actions == nil {
+			actions = subscriber.DoNothing
+		}
 
-		tryToSendToDLQ, retryErr := c.retry(ctx, msg, err)
+		subscriber.Log(ctx, err, logger)
+
+		tryToSendToDLQ, retryErr := c.retry(ctx, msg, err, actions)
 		if retryErr != nil {
-			c.Logger.Errorf(ctx, "sending message to DLQ due to error during retry: %s", retryErr)
-			c.sendToDLQ(ctx, err, msg, ack)
+			logger.Errorf(ctx, "sending message to DLQ due to error during retry: %s", retryErr)
+			c.sendToDLQ(ctx, logger, err, msg, ack, actions)
 			return
 		}
 
 		if !tryToSendToDLQ {
 			defer func() {
-				_ = ack(ctx)
+				_ = ack(ctx, logger, actions)
 			}()
 			return
 		}
 
-		c.sendToDLQ(ctx, err, msg, ack)
+		c.sendToDLQ(ctx, logger, err, msg, ack, actions)
 	}
 }
 
 // retry returns a bool indicating if it will be needed to send the message to a DLQ.
-func (c ConsumerAdapter) retry(ctx context.Context, msg subscriber.Message, err error) (bool, error) {
+func (c ConsumerAdapter) retry(ctx context.Context, msg subscriber.Message, err error, actions subscriber.Actions) (bool, error) {
 	if err == nil {
 		return false, nil
 	}
@@ -189,6 +200,8 @@ func (c ConsumerAdapter) retry(ctx context.Context, msg subscriber.Message, err 
 	if !retryableErr.Retryable() {
 		return true, nil
 	}
+
+	actions.BeforeRetry(ctx)
 
 	headers := publisher.ConvertToProducerHeaders(msg.Headers())
 	shouldRetry := hasAttemptsLeft(c.Config.RetryAttempts, headers)
@@ -206,12 +219,14 @@ func (c ConsumerAdapter) retry(ctx context.Context, msg subscriber.Message, err 
 		return true, err
 	}
 
+	actions.AfterRetry(ctx)
+
 	return false, nil
 }
 
-func (c ConsumerAdapter) sendToDLQ(ctx context.Context, err error, msg subscriber.Message, ack subscriber.Ack) {
+func (c ConsumerAdapter) sendToDLQ(ctx context.Context, logger log.Logger, err error, msg subscriber.Message, ack subscriber.Ack, actions subscriber.Actions) {
 	defer func() {
-		_ = ack(ctx)
+		_ = ack(ctx, logger, actions)
 	}()
 
 	if err == nil {
@@ -226,21 +241,18 @@ func (c ConsumerAdapter) sendToDLQ(ctx context.Context, err error, msg subscribe
 		return
 	}
 
+	actions.BeforeSendToDL(ctx)
+
 	publisherErr := c.Producer.WriteEvent(ctx, c.Config.DL, publisher.Event{
 		Value: msg.Value(),
 	})
 	if publisherErr != nil {
-		c.Logger.Errorf(ctx, "ignore message due to error sending message to DLQ: %s", publisherErr)
+		logger.Errorf(ctx, "ignoring message due to error sending message to DLQ: %s", publisherErr)
 		return
 	}
 
-	dlErr, ok := err.(subscriber.DLBehavior)
-	if !ok {
-		c.Logger.Errorf(ctx, "Message published on DLX due to: %s", err)
-		return
-	}
-
-	c.Logger.Error(ctx, dlErr.DLErrorMessage())
+	actions.AfterSendToDL(ctx)
+	logger.Error(ctx, "message published on DLX due to: %s", err)
 }
 
 // Stop will close the pool connections.
