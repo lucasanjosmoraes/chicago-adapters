@@ -10,7 +10,7 @@ require (
 	github.com/gomodule/redigo v1.8.5
 	github.com/gorilla/mux v1.8.0
 	github.com/hashicorp/vault/api v1.1.1
-	github.com/lucasanjosmoraes/chicago-ports v1.1.0
+	github.com/lucasanjosmoraes/chicago-ports v1.2.0
 	github.com/lucasanjosmoraes/chicago-toolkit v1.0.0
 	github.com/qiangxue/fasthttp-routing v0.0.0-20160225050629-6ccdc2a18d87
 	github.com/segmentio/kafka-go v0.4.17

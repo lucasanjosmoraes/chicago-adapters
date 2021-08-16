@@ -100,6 +100,21 @@ func (a Adapter) Warnf(ctx context.Context, format string, args ...interface{}) 
 	a.withCorrelationID(ctx).Warnf(format, args...)
 }
 
+func (a Adapter) WithField(f string, v interface{}) log.Logger {
+	return Adapter{
+		Config: a.Config,
+		logger: a.logger.WithField(f, v),
+	}
+}
+
+func (a Adapter) WithFields(fields map[string]interface{}) log.Logger {
+
+	return Adapter{
+		Config: a.Config,
+		logger: a.logger.WithFields(fields),
+	}
+}
+
 func (a Adapter) withCorrelationID(ctx context.Context) *logrus.Entry {
 	if ctx == nil {
 		ctx = context.Background()
