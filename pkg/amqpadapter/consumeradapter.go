@@ -24,6 +24,9 @@ type ConsumerConfig struct {
 	DL            string
 	RetryQueue    string
 	RetryAttempts int
+	PrefetchCount int
+	PrefetchSize  int
+	Global        bool
 }
 
 // ConsumerAdapter implements subscriber.Consumer to consume messages from RabbitMQ,
@@ -83,7 +86,7 @@ func (c *ConsumerAdapter) setupConsumer(ctx context.Context) error {
 	c.Queue = newQ
 
 	msgs, err := c.Pool.Consume(
-		ctx, c.Logger, c.Queue.Name, c.Config.ConsumerTag, false, false, false, false, nil,
+		ctx, c.Logger, c.Queue.Name, c.Config.ConsumerTag, false, false, false, false, c.Config.PrefetchCount, c.Config.PrefetchSize, c.Config.Global, nil,
 	)
 	if err != nil {
 		return err

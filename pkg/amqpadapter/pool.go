@@ -89,18 +89,19 @@ func (p *ChannelPool) QueueDeclare(ctx context.Context, l log.Logger, name strin
 
 // Consume will call for the Consume method of the amqp.Channel and will try to create
 // a new connection if receive an error on the first call.
-func (p *ChannelPool) Consume(ctx context.Context, l log.Logger, queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
-	msgs, err := p.ch.Consume(
-		queue, consumer, autoAck, exclusive, noLocal, noWait, args,
-	)
-	if err == nil {
-		return msgs, nil
-	}
-
-	l.Info(ctx, "error on consume. Trying to update AMQP Connection")
-	err = p.UpdateConnection(ctx, l)
+func (p *ChannelPool) Consume(ctx context.Context, l log.Logger, queue, consumer string, autoAck, exclusive, noLocal, noWait bool, prefetchCount, prefetchSize int, global bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+	err := p.ch.Qos(prefetchCount, prefetchSize, global)
 	if err != nil {
-		return nil, err
+		l.Info(ctx, "error on consume. Trying to update AMQP connection")
+		err = p.UpdateConnection(ctx, l)
+		if err != nil {
+			return nil, err
+		}
+
+		err = p.ch.Qos(prefetchCount, prefetchSize, global)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return p.ch.Consume(
