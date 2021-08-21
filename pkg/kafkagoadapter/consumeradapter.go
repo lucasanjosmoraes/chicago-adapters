@@ -180,6 +180,10 @@ func commit(ctx context.Context, l log.Logger, r *kafka.Reader, m kafka.Message,
 
 func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ack) subscriber.Reject {
 	return func(ctx context.Context, logger log.Logger, err error, actions subscriber.Actions) {
+		if actions == nil {
+			actions = subscriber.DoNothing
+		}
+
 		defer func() {
 			_ = ack(ctx, logger, actions)
 		}()
