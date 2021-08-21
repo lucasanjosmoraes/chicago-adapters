@@ -177,9 +177,7 @@ func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ac
 		}
 
 		if !tryToSendToDLQ {
-			defer func() {
-				_ = ack(ctx, logger, actions)
-			}()
+			_ = ack(ctx, logger, actions)
 			return
 		}
 
