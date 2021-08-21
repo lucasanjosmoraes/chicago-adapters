@@ -26,20 +26,24 @@ func (l KafkaLogger) Printf(format string, args ...interface{}) {
 	l.Logger.Debugf(context.TODO(), format, args...)
 }
 
-// ConsumerConfig contains all the attributes required to initialize the Consumer.
-type ConsumerConfig struct {
-	Brokers             string
+type AuthConfig struct {
 	User                string
 	Password            string
-	Topic               string
-	ConsumerGroup       string
-	DL                  string
-	LogConnections      bool
 	TLS                 bool
 	SkipTLSVerification bool
-	HeartbeatInterval   time.Duration
-	SessionTimeout      time.Duration
-	StartOffset         int64
+}
+
+// ConsumerConfig contains all the attributes required to initialize the Consumer.
+type ConsumerConfig struct {
+	Auth              AuthConfig
+	Brokers           string
+	Topic             string
+	ConsumerGroup     string
+	DL                string
+	LogConnections    bool
+	HeartbeatInterval time.Duration
+	SessionTimeout    time.Duration
+	StartOffset       int64
 }
 
 // ConsumerAdapter implements subscriber.Consumer to consume events from Kafka,
@@ -63,28 +67,10 @@ func NewConsumer(l log.Logger, p publisher.Producer, c ConsumerConfig) subscribe
 // Consume will instantiate a new kafka.Reader and pass the received events to
 // the given handler.
 func (c ConsumerAdapter) Consume(ctx context.Context, handler subscriber.HandleFunc) error {
-	mechanism := plain.Mechanism{
-		Username: c.Config.User,
-		Password: c.Config.Password,
-	}
-	dialer := &kafka.Dialer{
-		Timeout:       30 * time.Second,
-		SASLMechanism: mechanism,
-	}
-	if c.Config.TLS {
-		tlsConfig := &tls.Config{}
-		if c.Config.SkipTLSVerification {
-			tlsConfig.InsecureSkipVerify = true
-		}
-
-		dialer.TLS = tlsConfig
-	}
-
 	config := kafka.ReaderConfig{
 		Brokers:        strings.Split(c.Config.Brokers, ","),
 		GroupID:        c.Config.ConsumerGroup,
 		Topic:          c.Config.Topic,
-		Dialer:         dialer,
 		SessionTimeout: 10 * time.Second,
 	}
 	if c.Config.LogConnections {
@@ -98,6 +84,11 @@ func (c ConsumerAdapter) Consume(ctx context.Context, handler subscriber.HandleF
 	}
 	if c.Config.StartOffset > 0 {
 		config.StartOffset = c.Config.StartOffset
+	}
+
+	dialer := c.getDialer()
+	if dialer != nil {
+		config.Dialer = dialer
 	}
 
 	// TODO: Move *kafka.Reader to ConsumerAdapter.
@@ -219,4 +210,30 @@ func (c ConsumerAdapter) rejectMessage(msg subscriber.Message, ack subscriber.Ac
 		actions.AfterSendToDL(ctx)
 		logger.Errorf(ctx, "message published on DLQ due to: %s", err)
 	}
+}
+
+func (c ConsumerAdapter) getDialer() *kafka.Dialer {
+	emptyConfig := AuthConfig{}
+	if c.Config.Auth == emptyConfig {
+		return nil
+	}
+
+	mechanism := plain.Mechanism{
+		Username: c.Config.Auth.User,
+		Password: c.Config.Auth.Password,
+	}
+	dialer := &kafka.Dialer{
+		Timeout:       30 * time.Second,
+		SASLMechanism: mechanism,
+	}
+	if c.Config.Auth.TLS {
+		tlsConfig := &tls.Config{}
+		if c.Config.Auth.SkipTLSVerification {
+			tlsConfig.InsecureSkipVerify = true
+		}
+
+		dialer.TLS = tlsConfig
+	}
+
+	return dialer
 }

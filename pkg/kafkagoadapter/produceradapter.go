@@ -14,12 +14,9 @@ import (
 
 // ProducerConfig contains all the attributes required to initialize the Producer.
 type ProducerConfig struct {
-	Brokers             string
-	User                string
-	Password            string
-	LogConnections      bool
-	TLS                 bool
-	SkipTLSVerification bool
+	Auth           AuthConfig
+	Brokers        string
+	LogConnections bool
 }
 
 // ProducerAdapter implements publisher.Producer to produce events on Kafka topics,
@@ -46,37 +43,50 @@ func (a ProducerAdapter) getProducer(t string) *kafka.Writer {
 		return w
 	}
 
+	brokers := strings.Split(a.Config.Brokers, ",")
+	wForT := &kafka.Writer{
+		Addr:     kafka.TCP(brokers...),
+		Topic:    t,
+		Balancer: &kafka.RoundRobin{},
+	}
+	if a.Config.LogConnections {
+		wForT.Logger = KafkaLogger{Logger: a.Logger}
+	}
+
+	transport := a.getTransport()
+	if transport != nil {
+		wForT.Transport = transport
+	}
+
+	a.producers[t] = wForT
+
+	return wForT
+}
+
+func (a ProducerAdapter) getTransport() *kafka.Transport {
+	emptyConfig := AuthConfig{}
+	if a.Config.Auth == emptyConfig {
+		return nil
+	}
+
 	mechanism := plain.Mechanism{
-		Username: a.Config.User,
-		Password: a.Config.Password,
+		Username: a.Config.Auth.User,
+		Password: a.Config.Auth.Password,
 	}
 	transport := &kafka.Transport{
 		DialTimeout: 30 * time.Second,
 		SASL:        mechanism,
 	}
-	if a.Config.TLS {
+	if a.Config.Auth.TLS {
 		tlsConfig := &tls.Config{}
-		if a.Config.SkipTLSVerification {
+		if a.Config.Auth.SkipTLSVerification {
 			tlsConfig.InsecureSkipVerify = true
 		}
 
 		transport.TLS = tlsConfig
 	}
 
-	brokers := strings.Split(a.Config.Brokers, ",")
-	wForT := &kafka.Writer{
-		Addr:      kafka.TCP(brokers...),
-		Topic:     t,
-		Balancer:  &kafka.RoundRobin{},
-		Transport: transport,
-	}
-	if a.Config.LogConnections {
-		wForT.Logger = KafkaLogger{Logger: a.Logger}
-	}
-
-	a.producers[t] = wForT
-
-	return wForT
+	return transport
 }
 
 // Stop finishes adapter and dispose its resources.
