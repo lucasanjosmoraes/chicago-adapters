@@ -126,6 +126,10 @@ func (p *ChannelPool) Produce(ctx context.Context, l log.Logger, exchange, routi
 	return p.ch.Publish(exchange, routingKey, false, false, msg)
 }
 
+func (p *ChannelPool) Cancel() error {
+	return p.ch.Close()
+}
+
 // Stop will close the connections with the RabbitMQ.
 func (p *ChannelPool) Stop() error {
 	p.mux.Lock()

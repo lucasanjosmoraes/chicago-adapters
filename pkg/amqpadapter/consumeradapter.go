@@ -117,6 +117,8 @@ func (c ConsumerAdapter) watchConnErrors(ctx context.Context, handler subscriber
 				break
 			}
 		}
+
+		_ = c.Pool.Cancel()
 	}()
 }
 
